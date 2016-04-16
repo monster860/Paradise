@@ -1,3 +1,6 @@
+/obj/effect/spawner/dungeon
+	var/list/pipe_spawners = list()
+
 /obj/effect/spawner/dungeon/New()
 	spawn(10)
 		generate_dungeon()
@@ -78,9 +81,12 @@
 			P.meta = room
 			verts += P
 			room_type_index++
+			var/area/awaycontent/A = new()
+			A.name = "Dungeon Room [rand(111,999)]"
 			for(var/turf/T in block(locate(room.left(), room.bottom(), z), locate(room.right(), room.top(), z)))
-				T = T.ChangeTurf(/turf/simulated/floor/plasteel)
+				T = T.ChangeTurf(/turf/simulated/floor/plating)
 				T.fullUpdateMineralOverlays()
+				A.contents += T
 			populate_large_room(room, room_type_index, z)
 		room.invisibility = 101
 	var/list/edges = delaunay_edges(verts)
@@ -122,8 +128,10 @@
 	
 	place_wallmounts(rooms)
 	generate_maint_loot(rooms)
+	
+	prune_pipespawners()
 
-/proc/connect_rooms(var/datum/math/edge/E, var/z)
+/obj/effect/spawner/dungeon/proc/connect_rooms(var/datum/math/edge/E, var/z)
 	var/datum/math/point/p1
 	var/datum/math/point/p2
 	if(prob(50))
@@ -144,7 +152,7 @@
 			T = T.ChangeTurf(/turf/simulated/floor/plating)
 			T.fullUpdateMineralOverlays()
 			platings += T
-		new /obj/effect/spawner/pipes(T)
+		pipe_spawners += new /obj/effect/spawner/pipes(T)
 	if(p1.x > p2.x)
 		platings = reverselist(platings)
 	for(var/turf/T in block(locate(p2.x,p1.y,z),locate(p2.x,p2.y,z)))
@@ -155,12 +163,12 @@
 			T = T.ChangeTurf(/turf/simulated/floor/plating)
 			T.fullUpdateMineralOverlays()
 			platings += T
-		new /obj/effect/spawner/pipes(T)
+		pipe_spawners += new /obj/effect/spawner/pipes(T)
 	if(p1.y > p2.y)
 		platings2 = reverselist(platings2)
 	E.meta = platings + platings2
 
-/proc/populate_large_room(var/obj/effect/dungeon_room/R, var/type_index, var/z)
+/obj/effect/spawner/dungeon/proc/populate_large_room(var/obj/effect/dungeon_room/R, var/type_index, var/z)
 	switch(type_index)
 		if(1) // Gateway Room
 			var/turf/T = locate(R.center_x(), R.center_y(), z)
@@ -182,7 +190,7 @@
 			G.dir = SOUTHWEST
 			new /obj/machinery/gateway/centeraway(T)
 
-/proc/gen_dungeon_doors(var/datum/math/edge/E, var/z)
+/obj/effect/spawner/dungeon/proc/gen_dungeon_doors(var/datum/math/edge/E, var/z)
 	var/list/platings = E.meta
 	var/turf/T1
 	var/turf/T2
@@ -199,7 +207,7 @@
 	if(T2 && !(/obj/machinery/door/airlock/glass_mining in T1.contents))
 		new /obj/machinery/door/airlock/glass_mining(T2)
 
-/proc/place_wallmounts(var/list/rooms)
+/obj/effect/spawner/dungeon/proc/place_wallmounts(var/list/rooms)
 	for(var/obj/effect/dungeon_room/R in rooms)
 		if(!R.large)
 			continue
@@ -223,6 +231,8 @@
 			if(istype(get_step(T, EAST), /turf/simulated/mineral))
 				east_wall += T
 				possible_locs += T
+		if(!possible_locs.len)
+			continue
 		
 		if(north_wall.len && south_wall.len && prob(50))
 			var/turf/T = pick_n_take(north_wall)
@@ -232,7 +242,7 @@
 			T = pick(south_wall)
 			L = new(T)
 			L.dir = SOUTH
-		else if(east_wall.len && south_wall.len)
+		else if(east_wall.len && west_wall.len)
 			var/turf/T = pick_n_take(east_wall)
 			possible_locs -= T
 			var/obj/machinery/light/L = new(T)
@@ -255,13 +265,62 @@
 			if(T in west_wall)
 				L.dir = WEST
 				west_wall -= T
+		
+		if(!possible_locs.len)
+			continue
+		// APC
+		var/turf/T = pick_n_take(possible_locs)
+		var/the_dir
+		if(T in north_wall)
+			the_dir = NORTH
+			north_wall -= T
+		if(T in south_wall)
+			the_dir = SOUTH
+			south_wall -= T
+		if(T in east_wall)
+			the_dir = EAST
+			east_wall -= T
+		if(T in west_wall)
+			the_dir = WEST
+			west_wall -= T
+		var/obj/machinery/power/apc/A = new(T, the_dir, 1)
+		A.opened = 0
+		A.operating = 1
+		A.stat = 0
+		A.init()
+		var/p1x
+		var/p2x
+		var/p1y
+		var/p2y
+		if(prob(50))
+			p1x = A.x
+			p1y = A.y
+			p2x = R.center_x()
+			p2y = R.center_y()
+		else
+			p1x = R.center_x()
+			p1y = R.center_y()
+			p2x = A.x
+			p2y = A.y
+		for(var/turf/T2 in block(locate(p1x,p1y,R.z),locate(p2x,p1y,R.z)))
+			pipe_spawners += new /obj/effect/spawner/pipes/cable(T2)
+		for(var/turf/T2 in block(locate(p2x,p1y,R.z),locate(p2x,p2y,R.z)))
+			pipe_spawners += new /obj/effect/spawner/pipes/cable(T2)
+		for(var/obj/effect/spawner/pipes/S in A)
+			if(S.cable)
+				S.node = 1
 
-/proc/generate_maint_loot(var/list/rooms)
+/obj/effect/spawner/dungeon/proc/generate_maint_loot(var/list/rooms)
 	var/list/possible_locs = list()
 	for(var/obj/effect/dungeon_room/R)
 		if(R.large)
 			continue
 		for(var/turf/T in R.locs)
+			var/pipes = 0
+			for(var/obj/effect/spawner/pipes/P in T.contents)
+				pipes = 1
+			if(pipes)
+				continue
 			if(istype(get_step(T, NORTH), /turf/simulated/mineral) && istype(get_step(T, SOUTH), /turf/simulated/mineral))
 				continue // We're blocking a path.
 			if(istype(get_step(T, WEST), /turf/simulated/mineral) && istype(get_step(T, EAST), /turf/simulated/mineral))
@@ -278,6 +337,25 @@
 		var/containerType = pick(/obj/structure/closet,/obj/structure/rack,/obj/structure/table)
 		new containerType(T)
 		new /obj/effect/spawner/lootdrop/maintenance(T)
+
+/obj/effect/spawner/dungeon/proc/prune_pipespawners()
+	/*for(var/pipe_type in 3 to 3)
+		// Step 1- tree-ify the networks
+		var/datum/disjoint_set/DS = new(pipe_spawners.len)
+		var/list/junctions = list()
+		for(var/obj/effect/spawner/pipes/S in pipe_spawners)
+			S.completed = list()
+			S.junction = S.node
+			S.edges = list()
+		for(var/obj/effect/spawner/pipes/S in pipe_spawners)
+			var/list/connected = S.get_connected(pipe_type)
+			if(connected.len > 2)
+				S.junction = 1
+				junctions += S
+			for(var/obj/effect/spawner/pipes/S2 in connected)
+				S2.completed += S 
+				S.completed += S2*/
+			
 
 /obj/effect/dungeon_room
 	var/w
@@ -331,3 +409,8 @@
 
 /obj/effect/dungeon_room/proc/n_right()
 	return next_x + w
+
+/datum/pipe_spawner_edge
+	var/list/spawners
+	var/obj/effect/spawner/pipes/P1
+	var/obj/effect/spawner/pipes/P2
